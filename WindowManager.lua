@@ -15,6 +15,7 @@ local selected = -1 -- ID of window being dragged
 local lastPosX = 0  -- Mouse x position from the previous drag event
 local lastPosY = 0  -- Mouse y position from the previous drag event
 
+
 -- Check if the (x, y) point is within the given rectangle
 function inSquare(x, y, startX, startY, width, height)
     return ((x > startX and x < startX + width) and (y > startY and y < startY + height))
@@ -57,7 +58,7 @@ local function addWindow(title, id, posX, posY, sizeX, sizeY)
     }
 end
 
-
+-- Launch a new program with the given name
 local function launchProgram(name)
     -- Launch program
     local tempID = multishell.launch(getfenv(), "TestProgram.lua", nextWindowID)
@@ -70,11 +71,11 @@ local function launchProgram(name)
     nextWindowID = nextWindowID + 1
 end
 
-
 -- Try to find if the mouse event happened within any of the open windows and retransmit the event to it
 local function retransmitMouseEvent(name, index, x, y, id)
     id = id or -1 -- Default value
 
+    -- Search for a window
     if id == -1 then
         for ID, window in pairs(windows) do
             if clickedInWindow(x, y, window["Group"], window["Window"]) then
@@ -84,6 +85,7 @@ local function retransmitMouseEvent(name, index, x, y, id)
         end
     end
 
+    -- No window was found
     if id == -1 then
         return
     end
@@ -92,7 +94,7 @@ local function retransmitMouseEvent(name, index, x, y, id)
     os.queueEvent(name, id, index, x - groupX, y - groupY)
 end
 
-
+-- Handle the "glasses_click" event
 local function handleGlassesClick(index, x, y)
     if index == 1 then
         -- Clear the values in case glasses_up wasn't caught
@@ -121,7 +123,7 @@ local function handleGlassesClick(index, x, y)
     retransmitMouseEvent("wm_glasses_click", index, x, y)
 end
 
-
+-- Handle the "glasses_up" event
 local function handleGlassesUp(index, x, y)
     -- Stop dragging
     if index == 1 and selected ~= -1 then
@@ -147,7 +149,7 @@ local function handleGlassesUp(index, x, y)
     retransmitMouseEvent("wm_glasses_up", index, x, y)
 end
 
-
+-- Handle the "glasses_drag" event
 local function handleGlassesDrag(index, x, y)
     -- Do the dragging
     if index == 1 and selected ~= -1 then
@@ -168,29 +170,39 @@ local function handleGlassesDrag(index, x, y)
 end
 
 
--- Event handler, put into a program so "return" would work as "continue"
+-- Event handler
 local function handleEvents()
-    local name, index, x, y, extra = os.pullEvent()
+    local name, index, x, y, extra = os.pullEventRaw()
+
+    -- Terminate event - send terminate events to all running programs and then stop the WM
+    if name == "terminate" then
+        for ID, window in pairs(windows) do
+            os.queueEvent("wm_terminate", ID)
+        end
+        canvas.clear()
+
+        return true
+    end
 
     -- Mouse events
     if name == "glasses_click" then
         handleGlassesClick(index, x, y)
-        return
+        return false
     end
 
     if name == "glasses_up" then
         handleGlassesUp(index, x, y)
-        return
+        return false
     end
 
     if name == "glasses_drag" then
         handleGlassesDrag(index, x, y)
-        return
+        return false
     end
 
     if name == "glasses_scroll" then
         retransmitMouseEvent("wm_glasses_scroll", index, x, y)
-        return
+        return false
     end
 
     -- Keyboard events
@@ -201,13 +213,13 @@ local function handleEvents()
         addWindow(extra, index, 0, 0, x, y)
         programGroups[index] = windows[index]["ProgramGroup"]
         os.queueEvent("wm_created", index)
-        return
+        return false
     end
 
     if name == "program_close" then
         windows[index]["Group"].remove()
         windows[index] = nil
-        return
+        return false
     end
 
     if name == "program_resize" then
@@ -218,12 +230,16 @@ local function handleEvents()
         programGroups[index] = windows[index]["ProgramGroup"]
         os.queueEvent("wm_created", index)
     end
+
+    return false
 end    
 
 launchProgram("TestProgram.lua")
 
 -- Main event loop
-while true do handleEvents() end
+while true do 
+    if handleEvents() then break end
+end
 
 
 -- A window is a table with the following values:
@@ -253,4 +269,10 @@ while true do handleEvents() end
 --     wm_glasses_click, wm_glasses_drag, wm_glasses_up, wm_glasses_scroll, wm_key, wm_key_up - 
 --                                    retransmitted to the program of the active window if did not happen on the titlebar or close button. 
 --                                    Same arguments as the regular function, but the first one is id of window it is directed at
-
+--
+-- Global WM functions:
+--   inSquare
+--   clickedInWindow
+--
+-- Global WM variables:
+--   programGroups
