@@ -5,9 +5,12 @@ canvas.clear()
 local titlebarHeight = 8  -- Height of the titlebar, same for every window
 local nextWindowID = 1 -- ID for the next created window, constantly incrementing
 
-windows = {} -- Table of windows, stored as ID:Window
+local windows = {} -- Table of windows, stored as ID:Window
+
+programGroups = {} -- Table storing newly create groups, used to pass them from the WM to programs
 
 local clickWithinClose = -1 -- Close happens on release, make sure the press was also on the same close button
+local active = -1 -- ID of window currently active (will have key/mouse inputs passed into it)
 local selected = -1 -- ID of window being dragged
 local lastPosX = 0  -- Mouse x position from the previous drag event
 local lastPosY = 0  -- Mouse y position from the previous drag event
@@ -27,19 +30,21 @@ function clickedInWindow(clickX, clickY, group, window)
 end
 
 -- Create a window with the given title, position and size (size does not include the titlebar)
-function addWindow(title, id, posX, posY, sizeX, sizeY)
+local function addWindow(title, id, posX, posY, sizeX, sizeY)
     -- Draw the window
     local group = canvas.addGroup({posX, posY})
-    local programGroup = group.addGroup({0, titlebarHeight})
     local window = group.addRectangle(0, titlebarHeight, sizeX, sizeY, 0x222222FF)
     local titlebar = group.addRectangle(0, 0, sizeX, titlebarHeight, 0x111111FF)
     local title = group.addText({1, 1}, title, 0x444444FF, 0.8)
-
+    
     -- Draw the close button
     local closeButtonX = sizeX - titlebarHeight
     local close = group.addRectangle(closeButtonX, 0, titlebarHeight, titlebarHeight, 0x111111FF)
     group.addLine({closeButtonX + 2, 2}, {sizeX - 2, titlebarHeight - 2}, 0x444444FF, 5)
     group.addLine({closeButtonX + 2, titlebarHeight - 2}, {sizeX - 2, 2}, 0x444444FF, 5)
+
+    -- Add the group for the program to draw to
+    local programGroup = group.addGroup({0, titlebarHeight})
 
     -- Add it to the table of windows
     windows[id] = {
@@ -52,28 +57,43 @@ function addWindow(title, id, posX, posY, sizeX, sizeY)
     }
 end
 
-addWindow("Title", 1, 10, 10, 80, 40)
-addWindow("Title2", 2, 100, 10, 40, 40)
-addWindow("Title3", 3, 10, 60, 40, 80)
+
+local function launchProgram(name)
+    -- Launch program
+    local tempID = multishell.launch(getfenv(), "TestProgram.lua", nextWindowID)
+
+    -- Switch to the opened program and back, otherwise the program would close with "Press any key to continue" message
+    multishell.setFocus(tempID)
+    multishell.setFocus(multishell.getCurrent())
+
+    -- Increment ID
+    nextWindowID = nextWindowID + 1
+end
+
 
 -- Try to find if the mouse event happened within any of the open windows and retransmit the event to it
-function retransmitMouseEvent(name, index, x, y, id)
+local function retransmitMouseEvent(name, index, x, y, id)
     id = id or -1 -- Default value
 
     if id == -1 then
         for ID, window in pairs(windows) do
             if clickedInWindow(x, y, window["Group"], window["Window"]) then
                 id = ID
-                return
+                break
             end
         end
     end
-    
-    os.queueEvent(name, id, index, x, y)
+
+    if id == -1 then
+        return
+    end
+
+    local groupX, groupY = windows[id]["Group"].getPosition()
+    os.queueEvent(name, id, index, x - groupX, y - groupY)
 end
 
 
-function handleGlassesClick(index, x, y)
+local function handleGlassesClick(index, x, y)
     if index == 1 then
         -- Clear the values in case glasses_up wasn't caught
         clickWithinClose = -1
@@ -102,7 +122,7 @@ function handleGlassesClick(index, x, y)
 end
 
 
-function handleGlassesUp(index, x, y)
+local function handleGlassesUp(index, x, y)
     -- Stop dragging
     if index == 1 and selected ~= -1 then
         selected = -1
@@ -128,7 +148,7 @@ function handleGlassesUp(index, x, y)
 end
 
 
-function handleGlassesDrag(index, x, y)
+local function handleGlassesDrag(index, x, y)
     -- Do the dragging
     if index == 1 and selected ~= -1 then
         local groupX, groupY = windows[selected]["Group"].getPosition()
@@ -149,8 +169,8 @@ end
 
 
 -- Event handler, put into a program so "return" would work as "continue"
-function handleEvents()
-    local name, index, x, y = os.pullEvent()
+local function handleEvents()
+    local name, index, x, y, extra = os.pullEvent()
 
     -- Mouse events
     if name == "glasses_click" then
@@ -172,7 +192,35 @@ function handleEvents()
         retransmitMouseEvent("wm_glasses_scroll", index, x, y)
         return
     end
+
+    -- Keyboard events
+    -- TODO: Add "Active window" functionality
+
+    -- Program events
+    if name == "program_create" then
+        addWindow(extra, index, 0, 0, x, y)
+        programGroups[index] = windows[index]["ProgramGroup"]
+        os.queueEvent("wm_created", index)
+        return
+    end
+
+    if name == "program_close" then
+        windows[index]["Group"].remove()
+        windows[index] = nil
+        return
+    end
+
+    if name == "program_resize" then
+        local title = windows[index]["Title"].getText()
+        windows[index]["Group"].remove()
+        windows[index] = nil
+        addWindow(title, index, 0, 0, x, y)
+        programGroups[index] = windows[index]["ProgramGroup"]
+        os.queueEvent("wm_created", index)
+    end
 end    
+
+launchProgram("TestProgram.lua")
 
 -- Main event loop
 while true do handleEvents() end
@@ -200,9 +248,9 @@ while true do handleEvents() end
 --     program_close id - request to close the window with ID
 --     program_resize id sizeX sizeY - request to resize the window with given id to size
 --   Events sent by the WM to the programs:
---     wm_created id group - sent when a window is created, sends the group that the window can draw to
+--     wm_created id - sent when a window is created, the group is stored in the global programGroups variable
 --     wm_terminate id - sent when a window is closed, requesting program to close
---     wm_glasses_down, wm_glasses_drag, wm_glasses_up, wm_glasses_scroll, wm_key, wm_key_up - 
+--     wm_glasses_click, wm_glasses_drag, wm_glasses_up, wm_glasses_scroll, wm_key, wm_key_up - 
 --                                    retransmitted to the program of the active window if did not happen on the titlebar or close button. 
 --                                    Same arguments as the regular function, but the first one is id of window it is directed at
 
