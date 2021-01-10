@@ -6,7 +6,6 @@ local label = nil
 local button = nil
 local buttonPressed = false
 local ID = ...
-
 if ID == nil then error("No ID given") end
 
 local function drawProgram(group)
@@ -25,6 +24,10 @@ local function handleEvents()
         return false
     end
 
+    if name == "wm_terminate" then
+        return true
+    end
+
     if name == "wm_created" then
         programGroup = programGroups[ID]
         programGroups[ID] = nil
@@ -32,12 +35,8 @@ local function handleEvents()
         return false
     end
 
-    if name == "wm_terminate" then
-        return true
-    end
-
     if name == "wm_key" then
-        if val1 == 14 then
+        if val1 == 14 then -- Backspace
             label.setText(label.getText():sub(1, -2))
         end
         return false
