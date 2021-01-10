@@ -58,6 +58,37 @@ local function addWindow(title, id, posX, posY, sizeX, sizeY)
     }
 end
 
+local function deselectWindow()
+    if active == -1 then
+        return
+    end
+
+    local window = windows[active]
+    if window ~= nil and window["Selection"] ~= nil then
+        window["Selection"].remove()
+        window["Selection"] = nil
+    end
+
+    active = -1
+end
+
+local function selectWindow(id)
+    if active == id then
+        return
+    end
+
+    if active ~= -1 then
+        deselectWindow()
+    end
+
+    local window = windows[id]
+    local sizeX, sizeY = windows[id]["Window"].getSize()
+    local selection = windows[id]["Group"].addLines({0, 0}, {sizeX, 0}, {sizeX, sizeY + titlebarHeight}, {0, sizeY + titlebarHeight}, 0xFFFFFFFF, 1)
+    windows[id]["Selection"] = selection
+
+    active = id
+end
+
 -- Launch a new program with the given name
 local function launchProgram(name)
     -- Launch program
@@ -87,11 +118,12 @@ local function retransmitMouseEvent(name, index, x, y, id)
 
     -- No window was found
     if id == -1 then
-        return
+        return -1
     end
 
     local groupX, groupY = windows[id]["Group"].getPosition()
     os.queueEvent(name, id, index, x - groupX, y - groupY)
+    return id
 end
 
 -- Handle the "glasses_click" event
@@ -107,12 +139,14 @@ local function handleGlassesClick(index, x, y)
     for ID, window in pairs(windows) do
         -- Clicked on the X button, mark it for when glasses_up event arrives
         if index == 1 and clickedInWindow(x, y, window["Group"], window["Close"]) then
+            selectWindow(ID)
             clickWithinClose = ID
             return
         end
 
         -- Clicked on the titlebar, prepare for dragging
         if index == 1 and clickedInWindow(x, y, window["Group"], window["Titlebar"]) then
+            selectWindow(ID)
             selected = ID
             lastPosX = x
             lastPosY = y
@@ -120,7 +154,12 @@ local function handleGlassesClick(index, x, y)
         end
     end
 
-    retransmitMouseEvent("wm_glasses_click", index, x, y)
+    local id = retransmitMouseEvent("wm_glasses_click", index, x, y)
+    if id ~= -1 then
+        selectWindow(id)
+    else
+        deselectWindow()
+    end
 end
 
 -- Handle the "glasses_up" event
@@ -206,8 +245,27 @@ local function handleEvents()
     end
 
     -- Keyboard events
-    -- TODO: Add "Active window" functionality
+    if name == "key" then
+        if active ~= -1 then
+            os.queueEvent("wm_key", active, index, x)
+        end
+        return false
+    end
 
+    if name == "key_up" then
+        if active ~= -1 then
+            os.queueEvent("wm_key_up", active, index)
+        end
+        return false
+    end
+
+    if name == "char" then
+        if active ~= -1 then
+            os.queueEvent("wm_char", active, index)
+        end
+        return false
+    end
+    
     -- Program events
     if name == "program_create" then
         addWindow(extra, index, 0, 0, x, y)
@@ -266,7 +324,7 @@ end
 --   Events sent by the WM to the programs:
 --     wm_created id - sent when a window is created, the group is stored in the global programGroups variable
 --     wm_terminate id - sent when a window is closed, requesting program to close
---     wm_glasses_click, wm_glasses_drag, wm_glasses_up, wm_glasses_scroll, wm_key, wm_key_up - 
+--     wm_glasses_click, wm_glasses_drag, wm_glasses_up, wm_glasses_scroll, wm_key, wm_key_up, wm_char - 
 --                                    retransmitted to the program of the active window if did not happen on the titlebar or close button. 
 --                                    Same arguments as the regular function, but the first one is id of window it is directed at
 --
