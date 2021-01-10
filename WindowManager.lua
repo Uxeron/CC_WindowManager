@@ -61,7 +61,7 @@ end
 -- Launch a new program with the given name
 local function launchProgram(name)
     -- Launch program
-    local tempID = multishell.launch(getfenv(), "TestProgram.lua", nextWindowID)
+    local tempID = multishell.launch(getfenv(), name, nextWindowID)
 
     -- Switch to the opened program and back, otherwise the program would close with "Press any key to continue" message
     multishell.setFocus(tempID)

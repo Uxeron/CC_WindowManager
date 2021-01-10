@@ -33,7 +33,6 @@ local function handleEvents()
     end
 
     if name == "wm_terminate" then
-        print("Program closing")
         return true
     end
 
@@ -51,13 +50,6 @@ local function handleEvents()
 
     return false
 end
-
-local function printTable(table)
-    for key, value in ipairs(table) do
-        print(key, value)
-    end
-end
-
 
 while true do 
     if handleEvents() then break end
