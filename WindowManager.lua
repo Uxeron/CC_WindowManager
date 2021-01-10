@@ -5,15 +5,19 @@ canvas.clear()
 local titlebarHeight = 8  -- Height of the titlebar, same for every window
 local nextWindowID = 1 -- ID for the next created window, constantly incrementing
 
-local windows = {} -- Table of windows, stored as ID:Window
-
 programGroups = {} -- Table storing newly created groups, used to pass them from the WM to programs
+local windows = {} -- Table of windows, stored as ID:Window
+local launchedPrograms = {} -- Table storing program paths and their ID's, so the WM would know which exact program is requesting a window to be created
+local windowPositions = {} -- Table storing saved window positions
 
 local clickWithinClose = -1 -- Close happens on release, make sure the press was also on the same close button
 local active = -1 -- ID of window currently active (will have key/mouse inputs passed into it)
 local selected = -1 -- ID of window being dragged
 local lastPosX = 0  -- Mouse x position from the previous drag event
 local lastPosY = 0  -- Mouse y position from the previous drag event
+
+local autosaveTimerID = 0 -- ID of the timer used for autosaving
+local autosaveInterval = 5 -- Saves the window position and open program data every n seconds
 
 local ctrlDown = false -- Used for shortcuts
 
@@ -32,6 +36,10 @@ function clickedInWindow(clickX, clickY, group, window)
     local winX, winY = window.getPosition()
     local winW, winH = window.getSize()
     return inSquare(clickX, clickY, winX + groupX, winY + groupY, winW, winH)
+end
+
+function filenameFromPath(path)
+    return string.match(path, "([^\\]-)$")
 end
 
 -- Create a window with the given title, position and size (size does not include the titlebar)
@@ -60,6 +68,12 @@ local function addWindow(title, id, posX, posY, sizeX, sizeY)
         Title = title,
         Close = close
     }
+end
+
+local function closeWindow(id)
+    windowPositions[filenameFromPath(windows[id]["Path"])] = {windows[id]["Group"].getPosition()} -- Save last window position
+    windows[id]["Group"].remove() -- Remmove window from UI
+    windows[id] = nil
 end
 
 local function deselectWindow()
@@ -93,10 +107,55 @@ local function selectWindow(id)
     active = id
 end
 
--- Launch a new program with the given name
-local function launchProgram(name)
+local function createWindowForProgram(id, sizeX, sizeY, title)
+    -- Find real program name
+    local programPath = launchedPrograms[id]
+    local programName = filenameFromPath(launchedPrograms[id])
+
+    -- Try to load the last saved position for this program
+    local posX, posY = 0, 0
+    if windowPositions[programName] ~= nil then
+        posX = windowPositions[programName][1]
+        posY = windowPositions[programName][2]
+    end
+
+    -- Create the window
+    addWindow(title, id, posX, posY, sizeX, sizeY)
+    windows[id]["Path"] = programPath
+
+    -- If this is the "Run" program, automatically select it
+    if programName == "Run.lua" then
+        selectWindow(id)
+    end
+
+    -- Notify the program that it's window has been created
+    programGroups[id] = windows[id]["ProgramGroup"]
+    os.queueEvent("wm_created", id)
+end
+
+local function resizeWindow(id, sizeX, sizeY)
+    -- Save position and title
+    local posX, posY = windows[id]["Group"].getPosition()
+    local title = windows[id]["Title"].getText()
+
+    -- Delete existing window
+    windows[id]["Group"].remove()
+    windows[id] = nil
+
+    -- Create the new window
+    addWindow(title, id, posX, posY, sizeX, sizeY)
+    windows[id]["Path"] = launchedPrograms[id]
+
+    -- Notify the program that it's window has been created
+    programGroups[id] = windows[id]["ProgramGroup"]
+    os.queueEvent("wm_created", id)
+end
+
+-- Launch a new program with the given path
+local function launchProgram(path)
     -- Launch program
-    local tempID = multishell.launch(getfenv(), name, nextWindowID)
+    local tempID = multishell.launch(getfenv(), path, nextWindowID)
+    launchedPrograms[nextWindowID] = path
 
     -- Switch to the opened program and back, otherwise the program would close with "Press any key to continue" message
     if not debug then
@@ -106,6 +165,70 @@ local function launchProgram(name)
 
     -- Increment ID
     nextWindowID = nextWindowID + 1
+end
+
+local function loadWindowPositions()
+    if not fs.exists("WindowPositions") then
+        return
+    end
+
+    local file = fs.open("WindowPositions", "r")
+    windowPositions = {}
+    local line = file.readLine()
+    while line ~= nil do
+        local program, x, y = string.match(line, "(%S+)%s+(%d+)%s+(%d+)")
+        if program ~= nil and x ~= nil and y ~= nil then
+            windowPositions[program] = {tonumber(x), tonumber(y)}
+        end
+
+        line = file.readLine()
+    end
+
+    file.close()
+end
+
+local function updateWindowPositions()
+    for ID, window in pairs(windows) do
+        windowPositions[filenameFromPath(window["Path"])] = {window["Group"].getPosition()}
+    end
+end
+
+local function saveWindowPositions()
+    local file = fs.open("WindowPositions", "w")
+
+    for program, position in pairs(windowPositions) do
+        file.writeLine(program .. " " .. tostring(position[1]) .. " " .. tostring(position[2]))
+    end
+
+    file.close()
+end
+
+local function loadOpenPrograms()
+    if not fs.exists("OpenedPrograms") then
+        return
+    end
+
+    local file = fs.open("OpenedPrograms", "r")
+    local line = file.readLine()
+    while line ~= nil do
+        if fs.exists(line) then
+            launchProgram(line)
+        end
+
+        line = file.readLine()
+    end
+
+    file.close()
+end
+
+local function saveOpenPrograms()
+    local file = fs.open("OpenedPrograms", "w")
+
+    for ID, window in pairs(windows) do
+        file.writeLine(window["Path"])
+    end
+
+    file.close()
 end
 
 -- Try to find if the mouse event happened within any of the open windows and retransmit the event to it
@@ -183,8 +306,7 @@ local function handleGlassesUp(index, x, y)
         local window = windows[clickWithinClose]
         if clickedInWindow(x, y, window["Group"], window["Close"]) then
             os.queueEvent("wm_terminate", clickWithinClose)
-            window["Group"].remove() -- close this window
-            windows[clickWithinClose] = nil
+            closeWindow(clickWithinClose)
         end
 
         clickWithinClose = -1
@@ -221,12 +343,26 @@ local function handleEvents()
 
     -- Terminate event - send terminate events to all running programs and then stop the WM
     if name == "terminate" then
+        updateWindowPositions()
+        saveWindowPositions()
+        saveOpenPrograms()
+
         for ID, window in pairs(windows) do
             os.queueEvent("wm_terminate", ID)
         end
         canvas.clear()
 
         return true
+    end
+
+    -- Autosave timer event
+    if name == "timer" and index == autosaveTimerID then
+        updateWindowPositions()
+        saveWindowPositions()
+        saveOpenPrograms()
+
+        autosaveTimerID = os.startTimer(autosaveInterval)
+        return false
     end
 
     -- Mouse events
@@ -287,25 +423,17 @@ local function handleEvents()
     
     -- Program events
     if name == "program_create" then
-        addWindow(extra, index, 0, 0, x, y)
-        programGroups[index] = windows[index]["ProgramGroup"]
-        os.queueEvent("wm_created", index)
+        createWindowForProgram(index, x, y, extra)
         return false
     end
 
     if name == "program_close" then
-        windows[index]["Group"].remove()
-        windows[index] = nil
+        closeWindow(index)
         return false
     end
 
     if name == "program_resize" then
-        local title = windows[index]["Title"].getText()
-        windows[index]["Group"].remove()
-        windows[index] = nil
-        addWindow(title, index, 0, 0, x, y)
-        programGroups[index] = windows[index]["ProgramGroup"]
-        os.queueEvent("wm_created", index)
+        resizeWindow(index, x, y)
         return false
     end
 
@@ -316,6 +444,12 @@ local function handleEvents()
 
     return false
 end    
+
+
+loadWindowPositions()
+loadOpenPrograms()
+
+autosaveTimerID = os.startTimer(autosaveInterval)
 
 -- Main event loop
 while true do 
@@ -330,6 +464,9 @@ end
 --   Titlebar - reference to the window's titlebar
 --   Title - reference to the window's title
 --   Close - reference to the close button
+--   Selected* - selection rectangle (added by the select/deselect functions)
+--   Filename* - associated program's filename (added after opening window)
+--   Path* - associated program's full pathname (added after opening window)
 --
 -- On a glasses_click event, the window manager goes over every window group's Window, and checks if the input event happened within it
 --   If it did, it checks if it happened within that window's Titlebar
