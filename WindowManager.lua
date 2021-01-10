@@ -7,7 +7,7 @@ local nextWindowID = 1 -- ID for the next created window, constantly incrementin
 
 local windows = {} -- Table of windows, stored as ID:Window
 
-programGroups = {} -- Table storing newly create groups, used to pass them from the WM to programs
+programGroups = {} -- Table storing newly created groups, used to pass them from the WM to programs
 
 local clickWithinClose = -1 -- Close happens on release, make sure the press was also on the same close button
 local active = -1 -- ID of window currently active (will have key/mouse inputs passed into it)
@@ -15,6 +15,10 @@ local selected = -1 -- ID of window being dragged
 local lastPosX = 0  -- Mouse x position from the previous drag event
 local lastPosY = 0  -- Mouse y position from the previous drag event
 
+local ctrlDown = false -- Used for shortcuts
+
+local debug = ...
+if debug == nil then debug = false else debug=true end
 
 -- Check if the (x, y) point is within the given rectangle
 function inSquare(x, y, startX, startY, width, height)
@@ -95,8 +99,10 @@ local function launchProgram(name)
     local tempID = multishell.launch(getfenv(), name, nextWindowID)
 
     -- Switch to the opened program and back, otherwise the program would close with "Press any key to continue" message
-    multishell.setFocus(tempID)
-    multishell.setFocus(multishell.getCurrent())
+    if not debug then
+        multishell.setFocus(tempID)
+        multishell.setFocus(multishell.getCurrent())
+    end
 
     -- Increment ID
     nextWindowID = nextWindowID + 1
@@ -246,6 +252,15 @@ local function handleEvents()
 
     -- Keyboard events
     if name == "key" then
+        if index == 29 and not ctrlDown then
+            ctrlDown = true
+        end
+
+        if index == 19 and ctrlDown then
+            launchProgram("Run.lua")
+            return false
+        end
+
         if active ~= -1 then
             os.queueEvent("wm_key", active, index, x)
         end
@@ -253,6 +268,10 @@ local function handleEvents()
     end
 
     if name == "key_up" then
+        if index == 29 and ctrlDown then
+            ctrlDown = false
+        end
+
         if active ~= -1 then
             os.queueEvent("wm_key_up", active, index)
         end
@@ -287,12 +306,16 @@ local function handleEvents()
         addWindow(title, index, 0, 0, x, y)
         programGroups[index] = windows[index]["ProgramGroup"]
         os.queueEvent("wm_created", index)
+        return false
+    end
+
+    if name == "program_launch" then
+        launchProgram(index)
+        return false
     end
 
     return false
 end    
-
-launchProgram("TestProgram.lua")
 
 -- Main event loop
 while true do 
@@ -321,6 +344,7 @@ end
 --     program_create id sizeX sizeY title - request to create a new window with given id, size and title
 --     program_close id - request to close the window with ID
 --     program_resize id sizeX sizeY - request to resize the window with given id to size
+--     program_launch name - request to launch a program
 --   Events sent by the WM to the programs:
 --     wm_created id - sent when a window is created, the group is stored in the global programGroups variable
 --     wm_terminate id - sent when a window is closed, requesting program to close
