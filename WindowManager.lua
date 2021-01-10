@@ -50,7 +50,14 @@ end
 -- IN: File path.
 -- OUT: Filename.
 function filenameFromPath(path)
-    return string.match(path, "([^\\]-)$")
+    return string.match(path, "([^/]-)$")
+end
+
+-- Extract the path from the given path+filename string.
+-- IN: File path + filename.
+-- OUT: Path.
+function pathFromFullPath(path)
+    return string.match(path, "(.-)[^/]-[^/%.]+$")
 end
 
 --                 = = = = = = = = = = = = = = = = = = = = = = = =  W I N D O W   F U N C T I O N S  = = = = = = = = = = = = = = = = = = = = = = = =
@@ -501,7 +508,8 @@ local function handleEvents()
 
         -- R pressed
         if index == 19 and ctrlDown then
-            launchProgram("Run.lua")
+            local path = pathFromFullPath(shell.getRunningProgram())
+            launchProgram(path .. "Run.lua")
             return false
         end
 
@@ -592,6 +600,7 @@ end
 --   inRectangle
 --   clickedInWindow
 --   filenameFromPath
+--   pathFromFullPath
 --
 -- Global WM variables:
 --   programGroups
